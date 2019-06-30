@@ -12,7 +12,9 @@ def getfiles():
 	extensions = "jpg jpeg png".split()
 	filepaths = []
 	for ext in extensions:
-		filepaths += glob(path.join(SRCDIR, "*." + ext))
+		dirpath = path.join(SRCDIR, "**", "*." + ext)
+		print(dirpath)
+		filepaths += glob(dirpath, recursive=True)
 	return filepaths
 
 def polypoint(poly):
@@ -30,7 +32,7 @@ def polypoint(poly):
 		miss += 1
 	"""
 
-def getcolor(img, poly, samples=20):
+def getcolor(img, poly, samples=100):
 	colors = []
 
 	for i in range(samples):
@@ -45,12 +47,15 @@ def getcolor(img, poly, samples=20):
 def randompoly(w,h,vertcount=4):
 	return Polygon(*((randint(0,w-1), randint(0,h-1)) for i in range(vertcount)))
 
+def polyverts(poly):
+	return [(point.x, point.y) for point in poly.vertices]
+
 def polycrop(img, poly):
 	img = img.copy().convert("RGBA")
 	arr = np.asarray(img)
 
-	vertlist = [(point.x, point.y) for point in poly.vertices]
-
+	vertlist = polyverts(poly)
+	
 	maskimg = Image.new("RGBA", img.size, 0)
 	draw = ImageDraw.Draw(maskimg)
 	draw.polygon(vertlist, outline=(255,255,255,255), fill=(255,255,255,255))
@@ -65,10 +70,15 @@ def construct(inpath, outpath):
 	print(w,h)
 
 	images = []
+	avgcolors = []
 	for fp in getfiles():
+		#print(fp)
 		img = Image.open(fp).convert("RGB")
 		img = img.resize((w,h))
 		images.append(img)
+		avgcolors.append(getcolor(img, Polygon((0,0),(0,w),(0,h),(w,h))))
+		
+	#TODO sort/index avgcolors for faster search, change images list order equally
 
 	out = Image.new("RGBA", (w,h))
 
@@ -76,15 +86,29 @@ def construct(inpath, outpath):
 
 		least_dist = 3*256**2
 		least_img = None
-		for img in images:
-			#change poly pos, rotate?
-			s = getcolor(img, poly)
+		
+		min_x, min_y, max_x, max_y = poly.bounds
+		
+		scalex = w/(max_x-min_x)
+		scaley = h/(max_y-min_y)
+		scaledpoly = Polygon(*[((x-min_x)*scalex, (y-min_y)*scaley) for x,y in polyverts(poly)])
+		for i, img in enumerate(images):
+			#change poly pos, scale, rotate?
+			#s = getcolor(img, poly)
+			s = avgcolors[i]
 			dist = sum([(a-b)**2 for a,b in zip(s,color)])
 			if dist < least_dist:
 				least_dist = dist
 				least_img = img
 
-		return least_img, polycrop(least_img, poly)
+		ret = Image.new("RGBA", (w,h))
+		tri = polycrop(least_img, scaledpoly)
+		if tri is None:
+			raise Exception("Source directory contains no images")
+		ret.paste(least_img, tri)
+		#return least_img, polycrop(least_img, scaledpoly)
+		ret = ret.resize((max_x-min_x,max_y-min_y))
+		return ret, (min_x, min_y)
 
 	points = [(0,0), (w,0), (0,h), (w,h)]
 
@@ -98,9 +122,13 @@ def construct(inpath, outpath):
 		for t, triangle in enumerate(triangles):
 			print(f"{t}/{len(triangles)}")
 			poly = Polygon(*triangle)
-			img, mask = sample(getcolor(target, poly), poly)
-			min_x, min_y, max_x, max_y = poly.bounds
-			out.paste(img, (0,0), mask)
+			targetcolor = getcolor(target, poly)
+			#img, mask = sample(targetcolor, poly)
+			#out.paste(img, (0,0), mask)
+			
+			img, coords = sample(targetcolor, poly)
+			out.paste(img, coords, img)
+			
 			#img.save(f"conv/{t}-img.png")
 			#mask.save(f"conv/{t}-mask.png")
 	except KeyboardInterrupt:
