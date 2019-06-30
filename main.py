@@ -3,10 +3,25 @@ from glob import glob
 from os import path
 from sys import argv
 from sympy.geometry.polygon import Polygon, Point
-from random import randint
+from random import randint, sample
 import pytess
 import numpy as np
 from argparse import ArgumentParser
+
+import sys
+
+def progressbar(it, prefix="", size=60, file=sys.stdout):
+    count = len(it)
+    def show(j):
+        x = int(size*j/count)
+        file.write("%s[%s%s] %i/%i\r" % (prefix, "#"*x, "."*(size-x), j, count))
+        file.flush()        
+    show(0)
+    for i, item in enumerate(it):
+        yield item
+        show(i+1)
+    file.write("\n")
+    file.flush()
 
 def getfiles():
 	extensions = "jpg jpeg png".split()
@@ -32,7 +47,7 @@ def polypoint(poly):
 		miss += 1
 	"""
 
-def getcolor(img, poly, samples=100):
+def getcolor(img, poly, samples=200):
 	colors = []
 
 	for i in range(samples):
@@ -62,6 +77,10 @@ def polycrop(img, poly):
 
 	return maskimg
 
+def poprand(items, n):
+    to_delete = set(sample(range(len(items)),n))
+    return [x for i,x in enumerate(items) if not i in to_delete]
+
 def construct(inpath, outpath):
 
 	target = Image.open(inpath).convert("RGB")
@@ -77,6 +96,8 @@ def construct(inpath, outpath):
 		img = img.resize((w,h))
 		images.append(img)
 		avgcolors.append(getcolor(img, Polygon((0,0),(0,w),(0,h),(w,h))))
+		
+	print(f"{len(images)} images.")
 		
 	#TODO sort/index avgcolors for faster search, change images list order equally
 
@@ -111,16 +132,36 @@ def construct(inpath, outpath):
 		return ret, (min_x, min_y)
 
 	points = [(0,0), (w,0), (0,h), (w,h)]
+	
+	
+	if CLOUD is None:
+		for i in range(NUMPOINTS):
+			points.append((randint(0,w-1), randint(0,h-1)))
+	else:
+		cloud = Image.open(CLOUD)
+		for x in range(cloud.size[0]):
+			for y in range(cloud.size[1]):
+				if cloud.getpixel((x,y))[:3] != (255,255,255):
+					points.append((x,y))
 
-	for i in range(NUMPOINTS):
+	print(f"{len(points)} points.")
+	
+	if len(points) > NUMPOINTS:
+		n = len(points)-NUMPOINTS
+		print(f"Sampling {n} down to {NUMPOINTS}.")
+		points = poprand(points, n)
+
+	ADDPOINTS = 200
+	print(f"Adding {ADDPOINTS} random points.")
+	for i in range(ADDPOINTS):
 		points.append((randint(0,w-1), randint(0,h-1)))
 
 	triangles = pytess.triangulate(points)
 	#triangles = pytess.voronoi(points)
 
 	try:
-		for t, triangle in enumerate(triangles):
-			print(f"{t}/{len(triangles)}")
+		for t, triangle in progressbar(list(enumerate(triangles)), "Triangles: ", 40):
+			#print(f"{t}/{len(triangles)}")
 			poly = Polygon(*triangle)
 			targetcolor = getcolor(target, poly)
 			#img, mask = sample(targetcolor, poly)
@@ -145,6 +186,8 @@ if __name__ == "__main__":
         help='The path to the input file')
 	parser.add_argument('output', metavar='OUTPUT', type=str,
         help='The path to the output file')
+	parser.add_argument('--cloud', dest='cloud', type=str, nargs="?", default=None,
+        help='The path to the output file')
 	parser.add_argument('--points', dest='numpoints', type=int, nargs="?", default=100,
         help="The number of points in the image that are tesselated")
 
@@ -153,6 +196,7 @@ if __name__ == "__main__":
 	SRCDIR = args.srcdir
 	TARGET = args.target
 	OUTPUT = args.output
+	CLOUD = args.cloud
 	NUMPOINTS = args.numpoints
 	
 	construct(TARGET, OUTPUT)
